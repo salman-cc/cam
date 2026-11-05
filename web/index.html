@@ -184,7 +184,14 @@ var state = {
   autoRetries: 0
 };
 
-var AUTO_RETRY_LIMIT = 5;
+/*
+ * Automatic reconnects never stop: a camera page is usually left open
+ * unattended on a wall display, so giving up after a few tries leaves a
+ * dead view until someone refreshes by hand. Backoff keeps a dead
+ * server from being hammered: the delay doubles from 1 s per attempt
+ * and caps at RECONNECT_MAX_DELAY_MS.
+ */
+var RECONNECT_MAX_DELAY_MS = 30000;
 
 var el = function (id) { return document.getElementById(id); };
 
@@ -405,18 +412,21 @@ function teardown(delayMs) {
   }
 
   /*
-   * One automatic retry covers a camera or network blip. After that the
-   * retries are bounded so a server that stays down is not hammered,
-   * and the operator decides when to try again.
+   * One immediate retry covers a camera or network blip. After that,
+   * automatic reconnects continue with capped exponential backoff, so a
+   * server that stays down is not hammered but the page recovers on
+   * its own once the camera is back.
    */
   if (delayMs && !state.retried) {
     state.retried = true;
     window.setTimeout(connect, delayMs);
-  } else if (state.autoConnect && state.autoRetries < AUTO_RETRY_LIMIT) {
+  } else if (state.autoConnect) {
+    var backoffMs = Math.min(1000 * Math.pow(2, state.autoRetries),
+                             RECONNECT_MAX_DELAY_MS);
     state.autoRetries++;
-    setState("reconnecting (" + state.autoRetries + "/" + AUTO_RETRY_LIMIT +
-             ")", "warn");
-    window.setTimeout(connect, Math.min(1000 * state.autoRetries, 5000));
+    setState("reconnecting (attempt " + state.autoRetries + ", next in " +
+             Math.round(backoffMs / 1000) + " s)", "warn");
+    window.setTimeout(connect, backoffMs);
   }
 }
 
