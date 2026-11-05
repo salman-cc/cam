@@ -24,7 +24,7 @@ Tested platforms (via build + cross-compile + logic review):
 
 ```sh
 sudo apt update && sudo apt install -y build-essential
-git clone https://github.com/ccsalman545/cam.git
+git clone https://github.com/salman-cc/cam.git
 cd cam
 gcc -O2 -Wall server.c mongoose.c -o web_server
 mkdir -p web_root
@@ -75,7 +75,7 @@ WantedBy=multi-user.target
 
 ```sh
 sudo apt install -y build-essential libssl-dev libsrtp2-dev libx264-dev rpicam-apps
-git clone --recursive https://github.com/ccsalman545/cam.git camstream && cd camstream
+git clone --recursive https://github.com/salman-cc/cam.git camstream && cd camstream
 make -j4
 ./build/camstream --source csi --width 1280 --height 720 --fps 30 --encoder auto --listen 0.0.0.0 --http-port 8080
 ```
@@ -99,7 +99,7 @@ make -j4
 
 ```sh
 sudo apt install -y build-essential libx264-dev cmake python3-jsonschema python3-jinja2 rpicam-apps
-git clone --recursive https://github.com/ccsalman545/cam.git && cd cam
+git clone --recursive https://github.com/salman-cc/cam.git && cd cam
 git submodule update --init --recursive
 make camstream-libpeer -j4
 ./build/camstream-libpeer --source csi --width 1280 --height 720 --fps 30 --listen 0.0.0.0 --http-port 8080
@@ -175,7 +175,7 @@ Both Pi and laptop fallback to `169.254.x.x`, mDNS works over same cable.
 #!/bin/sh
 set -e
 sudo apt update && sudo apt install -y build-essential libssl-dev libsrtp2-dev libx264-dev cmake python3-jsonschema python3-jinja2 rpicam-apps git
-git clone --recursive https://github.com/ccsalman545/cam.git camstream && cd camstream
+git clone --recursive https://github.com/salman-cc/cam.git camstream && cd camstream
 make -j$(nproc)
 make camstream-libpeer -j$(nproc)
 sudo make install && sudo make install-libpeer

@@ -94,7 +94,7 @@ It also includes:
 
 ```sh
 sudo apt update && sudo apt install -y build-essential libssl-dev libsrtp2-dev libx264-dev rpicam-apps
-git clone https://github.com/ccsalman545/cam.git camstream && cd camstream
+git clone https://github.com/salman-cc/cam.git camstream && cd camstream
 make -j4
 sudo systemctl stop camstream  # if installed
 ./build/camstream --source csi --width 1280 --height 720 --fps 30 --encoder auto --listen 0.0.0.0 --http-port 8080
