@@ -915,10 +915,58 @@ static void tls_reject(Server *server, struct mg_connection *connection)
     }
 }
 
+/*
+ * data[8..15] holds a millisecond timestamp per connection: for
+ * CONN_TLS_REJECTED it is when the rejection started (see tls_reject),
+ * for CONN_HTTP it is the last activity, used by the idle close below.
+ */
+static uint64_t conn_timestamp(const struct mg_connection *connection)
+{
+    uint64_t value = 0;
+
+    memcpy(&value, connection->data + 8, sizeof(value));
+
+    return value;
+}
+
+static void conn_touch(struct mg_connection *connection, uint64_t now)
+{
+    memcpy(connection->data + 8, &now, sizeof(now));
+}
+
 static void tls_guard(struct mg_connection *connection, int event,
                       void *event_data)
 {
     Server *server = connection->fn_data;
+
+    if (event == MG_EV_OPEN || event == MG_EV_ACCEPT) {
+        conn_touch(connection, now_ms());
+    }
+
+    /*
+     * Idle keep-alive close. A browser leaves several connections open
+     * after loading the page; without a timeout they accumulate until
+     * the poll set overflows and the main loop stops sleeping (100%
+     * CPU). Connections with data in flight are left alone, and an
+     * active connection refreshes its timestamp on every read, write
+     * and completed request, so only truly idle ones are drained.
+     */
+    if (connection->data[0] != CONN_TLS_REJECTED &&
+        !connection->is_listening && !connection->is_websocket) {
+        if (event == MG_EV_READ || event == MG_EV_WRITE ||
+            event == MG_EV_HTTP_MSG) {
+            conn_touch(connection, now_ms());
+        } else if (event == MG_EV_POLL) {
+            uint32_t timeout = server->config.http_idle_timeout_ms;
+
+            if (timeout > 0 &&
+                now_ms() - conn_timestamp(connection) >= timeout &&
+                connection->send.len == 0 && connection->recv.len == 0) {
+                /* Graceful: FIN once the (empty) send buffer is out. */
+                connection->is_draining = 1;
+            }
+        }
+    }
 
     if (connection->data[0] == CONN_TLS_REJECTED) {
         if (event == MG_EV_READ) {

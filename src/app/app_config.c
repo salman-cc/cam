@@ -32,6 +32,7 @@ void app_config_defaults(AppConfig *config)
     config->keyframe_seconds = 2;
 
     config->http_port = 8080;
+    config->http_idle_timeout_ms = 30000;
     config->udp_base_port = 50000;
 
     /*
@@ -183,6 +184,15 @@ static int app_config_set_key(AppConfig *config,
             return -1;
         }
         config->http_port = (uint16_t) number;
+        return 0;
+    }
+
+    if (strcmp(key, "http_idle_timeout_ms") == 0) {
+        /* Up to one hour; 0 disables the idle close. */
+        if (parse_unsigned(value, &number) != 0 || number > 3600000) {
+            return -1;
+        }
+        config->http_idle_timeout_ms = number;
         return 0;
     }
 
