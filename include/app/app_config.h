@@ -44,6 +44,7 @@ typedef struct {
     uint32_t keyframe_seconds;
 
     uint16_t http_port;
+    uint32_t http_idle_timeout_ms; /* idle keep-alive close; 0 = never */
     uint16_t udp_base_port;     /* first of MAX_SESSIONS consecutive ports */
     uint16_t mdns_port;         /* mDNS responder port, 5353 unless overridden */
 

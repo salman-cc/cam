@@ -39,11 +39,13 @@
 #define HTTP_PORT_NO_CAM 18992
 #define HTTP_PORT_MANY   18993
 #define HTTP_PORT_SHIPPED 18994
+#define HTTP_PORT_IDLE   18995
 #define MDNS_PORT_SHIPPED 15356
 #define UDP_PORT_TEST    60990
 #define UDP_PORT_NO_CAM  60992
 #define UDP_PORT_MANY    60994
 #define UDP_PORT_SHIPPED 60996
+#define UDP_PORT_IDLE    60998
 
 #define MAX_VIEWERS_TEST 8
 
@@ -583,6 +585,244 @@ static int write_broken_camera_config(const char *path, uint16_t http_port,
 /* ------------------------------------------------------------------ */
 /* Scenarios                                                           */
 /* ------------------------------------------------------------------ */
+
+/* Case-insensitive substring search (avoids the GNU-only strcasestr). */
+static char *str_find_nocase(char *haystack, const char *needle)
+{
+    size_t needle_len = strlen(needle);
+    char *p;
+
+    for (p = haystack; *p != 0; p++) {
+        size_t i;
+
+        for (i = 0; i < needle_len; i++) {
+            char a = p[i];
+            char b = needle[i];
+
+            if (a >= 'A' && a <= 'Z') {
+                a = (char) (a - 'A' + 'a');
+            }
+
+            if (a != b) {
+                break;
+            }
+        }
+
+        if (i == needle_len) {
+            return p;
+        }
+    }
+
+    return NULL;
+}
+
+/*
+ * One request/response on an already-connected socket, keeping the
+ * connection open for reuse. Returns the HTTP status, or -1 on a
+ * transport or framing error. Used by the idle-timeout test, which
+ * needs more control over the connection lifetime than http_call's
+ * always-close style gives.
+ */
+static int http_exchange_fd(int fd, const char *path)
+{
+    char request[1024];
+    int length = snprintf(request, sizeof(request),
+                          "GET %s HTTP/1.1\r\n"
+                          "Host: 127.0.0.1\r\n"
+                          "Connection: keep-alive\r\n\r\n",
+                          path);
+
+    if (length <= 0 || (size_t) length >= sizeof(request)) {
+        return -1;
+    }
+
+    size_t sent = 0;
+
+    while (sent < (size_t) length) {
+        ssize_t written = send(fd, request + sent,
+                               (size_t) length - sent, 0);
+
+        if (written <= 0) {
+            return -1;
+        }
+
+        sent += (size_t) written;
+    }
+
+    static char response[RESPONSE_MAX];
+    size_t received = 0;
+    size_t body_start = 0;
+    long content_length = -1;
+
+    for (;;) {
+        if (received + 1 >= sizeof(response)) {
+            return -1;
+        }
+
+        ssize_t got = recv(fd, response + received,
+                           sizeof(response) - 1 - received, 0);
+
+        if (got <= 0) {
+            return -1;
+        }
+
+        received += (size_t) got;
+        response[received] = 0;
+
+        if (body_start == 0) {
+            char *header_end = strstr(response, "\r\n\r\n");
+
+            if (header_end == NULL) {
+                continue;
+            }
+
+            body_start = (size_t) (header_end + 4 - response);
+
+            char *cl = str_find_nocase(response, "content-length:");
+
+            if (cl == NULL || cl > header_end) {
+                return -1;
+            }
+
+            content_length = strtol(cl + 15, NULL, 10);
+
+            if (content_length < 0) {
+                return -1;
+            }
+        }
+
+        if (received >= body_start + (size_t) content_length) {
+            break;
+        }
+    }
+
+    int status = 0;
+
+    if (sscanf(response, "HTTP/1.1 %d", &status) != 1 &&
+        sscanf(response, "HTTP/1.0 %d", &status) != 1) {
+        return -1;
+    }
+
+    return status;
+}
+
+/*
+ * Waits up to timeout_ms for the peer to close the socket. Returns 1
+ * when the close arrived in time.
+ */
+static int wait_for_eof(int fd, int timeout_ms)
+{
+    int waited = 0;
+
+    while (waited <= timeout_ms) {
+        char byte;
+        ssize_t got = recv(fd, &byte, 1, MSG_DONTWAIT);
+
+        if (got == 0) {
+            return 1;
+        }
+
+        if (got < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+            return 0;
+        }
+
+        sleep_ms(50);
+        waited += 50;
+    }
+
+    return 0;
+}
+
+/*
+ * Regression test for the accumulated-idle-connections bug: browsers
+ * hold keep-alive connections after loading the page, and without a
+ * timeout they piled up until the poll set overflowed and the server
+ * spun at 100% CPU. With http_idle_timeout_ms the server must close a
+ * connection that goes idle, while a connection that keeps exchanging
+ * requests must stay usable well past the timeout.
+ */
+static void test_idle_connection_timeout(const char *binary)
+{
+    const char *config_path = "/tmp/camstream-test-idle.conf";
+    const char *log_path = "/tmp/camstream-test-idle.log";
+
+    char text[1024];
+
+    snprintf(text, sizeof(text),
+             "# written by tests/test_server_api.c\n"
+             "source = test\n"
+             "encoder = sw\n"
+             "width = 320\n"
+             "height = 240\n"
+             "fps = 10\n"
+             "bitrate_kbps = 500\n"
+             "keyframe_seconds = 2\n"
+             "listen = 127.0.0.1\n"
+             "http_port = %u\n"
+             "udp_port = %u\n"
+             "mdns = off\n"
+             "verbose = 0\n"
+             "http_idle_timeout_ms = 1500\n",
+             (unsigned) HTTP_PORT_IDLE, (unsigned) UDP_PORT_IDLE);
+
+    if (write_file(config_path, text) != 0) {
+        check(0, "the idle-timeout config file is written");
+        return;
+    }
+
+    pid_t pid = spawn_server(binary, config_path, log_path,
+                             HTTP_PORT_IDLE);
+
+    check(pid > 0, "the idle-timeout server starts");
+
+    if (pid <= 0) {
+        return;
+    }
+
+    int fd = connect_to(HTTP_PORT_IDLE);
+
+    check(fd >= 0, "the idle test connects");
+
+    if (fd >= 0) {
+        check(http_exchange_fd(fd, "/api/status") == 200,
+              "the idle test's first request answers 200");
+
+        check(wait_for_eof(fd, 5000),
+              "the server closes a keep-alive connection gone idle");
+
+        close(fd);
+    }
+
+    /*
+     * Four exchanges 500 ms apart: the gaps (2 s total) exceed the
+     * 1.5 s timeout, so every exchange would fail if activity did not
+     * refresh the idle deadline.
+     */
+    fd = connect_to(HTTP_PORT_IDLE);
+
+    check(fd >= 0, "the keep-alive test connects");
+
+    if (fd >= 0) {
+        int alive = 1;
+        int i;
+
+        for (i = 0; i < 4; i++) {
+            if (http_exchange_fd(fd, "/api/status") != 200) {
+                alive = 0;
+                break;
+            }
+
+            sleep_ms(500);
+        }
+
+        check(alive, "an active keep-alive connection stays usable "
+                     "past the idle timeout");
+
+        close(fd);
+    }
+
+    stop_server(pid, "SIGTERM ends the idle-timeout server");
+}
 
 static void test_management_interface(const char *binary)
 {
@@ -1171,6 +1411,7 @@ int main(int argc, char **argv)
     test_management_interface(binary);
     test_concurrent_viewers(binary);
     test_camera_failure_keeps_http_up(binary);
+    test_idle_connection_timeout(binary);
     test_shipped_config(binary, shipped_config);
 
     if (g_failures != 0) {
