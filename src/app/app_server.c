@@ -58,7 +58,14 @@
 
 #define MAX_RTC_SESSIONS 8
 #define AU_RING_SLOTS 8
-#define AU_SLOT_CAPACITY (512 * 1024)
+/*
+ * One slot must hold a whole access unit. An IDR at 1080p with a
+ * detailed scene can exceed 512 KiB even at moderate bitrates; when it
+ * does, the encoder drops it and requests a new keyframe, which is
+ * oversized too, so new viewers see black video forever. 1 MiB slots
+ * cost 8 MiB total, acceptable even on a Pi Zero.
+ */
+#define AU_SLOT_CAPACITY (1024 * 1024)
 #define MAX_DATAGRAMS_PER_POLL 32
 #define RATE_WINDOW_MS 1000
 #define JSON_STATUS_CAPACITY 8192
